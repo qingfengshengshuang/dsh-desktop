@@ -8,7 +8,7 @@
 // runner child alone.
 
 import { formatUnexpectedHostExit, startIsolatedDesktopHost } from './host-process.ts'
-import { app, clipboard, crashReporter, safeStorage, session, shell } from 'electron'
+import { app, clipboard, crashReporter, desktopCapturer, safeStorage, session, shell } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -1711,6 +1711,16 @@ async function start(): Promise<void> {
           hostCtx.provide('desktopClipboard', {
             writeText: (text: string) => clipboard.writeText(text),
             readText: () => clipboard.readText(),
+          })
+          hostCtx.provide('desktopCapture', {
+            captureScreen: async () => {
+              const sources = await desktopCapturer.getSources({
+                types: ['screen'],
+                thumbnailSize: { width: 1920, height: 1080 },
+              })
+              const primary = sources[0]
+              return primary === undefined ? undefined : primary.thumbnail.toDataURL()
+            },
           })
           await hostCtx.plugin(DesktopActionsService, {
             openTerminal: () => { runtime.openTerminal() },

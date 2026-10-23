@@ -17,3 +17,7 @@ dsh-community-market/lib/
 dsh-desktop-next/lib/
 dsh-desktop-next/dist/
 dsh-desktop-next/.desktop-next/
+
+# local-only workspace: personal notes and experiments must never be published
+notes/
+dsh-plugin-desktop-local/
