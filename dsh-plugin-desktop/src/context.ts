@@ -26,7 +26,12 @@
  * re-provides the remembered-file list (source kind `desktop-files`) at the
  * first step of a turn. Both default off.
  *
- * @module dsh-plugin-desktop-beta/context
+ * @module dsh-plugin-desktop/context
+ *
+ * NOTE (2026-10-23): the shipped profile enables this plugin with
+ * `fileIndex`/`fileRecall` off. The L2 fold is deliberately additive; upstream
+ * `compaction-basic` still owns L1/L2 compaction. Recall injects only a newly
+ * folded memory version once per turn, never the raw history.
  */
 
 import type { Context } from '@deepseek-ai/cordis'

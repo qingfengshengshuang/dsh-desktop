@@ -1,6 +1,8 @@
-# DSH Desktop 上下文管理改造 · 设计方案（提案）
+# DSH Desktop 上下文管理改造 · 设计方案（已修订）
 
-> 状态：**提案（proposed）**，尚未实现。本文定义「对话过长自动压缩 + 分层压缩 + 长短期记忆」核心闭环的架构，以及 KV 缓存、重要文件 markdown、RAG、上下文缓存与 30 天回收箱的配套落点。核心约束：`deepseek-harness/` 是只读上游子模块，本次改造全部落在 Desktop 自有插件层，通过已文档化的扩展点组合/替换上游服务，不改动上游任何源码。
+> 状态：**已落地并修订（2026-10-23）**。本文定义「对话过长自动压缩 + 分层压缩 + 长短期记忆」核心闭环的架构，以及 KV 缓存、重要文件 markdown、RAG、上下文缓存与 30 天回收箱的配套落点。核心约束：`deepseek-harness/` 是只读上游子模块，本次改造全部落在 Desktop 自有插件层，通过已文档化的扩展点组合/替换上游服务，不改动上游任何源码。
+>
+> **2026-10-23 修订**：实测发现原 L2 折叠只在 `compaction/summary` 之后追加，不替换 L1，且默认阈值 0.8 在 1M 窗口下要等约 800K 才触发，导致“分层”长期不生效。现改为：上游递归 checkpoint 承担 L1–L2；`compaction-basic` 使用 100K/20K 预算；`desktop-context`（L2/L3 记忆与召回）和 `desktop-loop-guard`（自反思/熔断复位）已启用；仅多智能体编排被移除。详见文末「十一」。**先读第十一节，再看前面历史设计。**
 
 ## 一、背景与目标
 
@@ -234,3 +236,60 @@ Marvis 无官方 API/CLI，接入方式为剪贴板人工在环，脚本**不自
 - L4 高风险任务转交人工，不自动执行。
 - 执行失败回 Pro 重新定级，re-plan 有界。
 - 下层（flash/marvis/子目标）拿不到父历史全量。
+
+## 十一、2026-10-23 修订：实际生效的上下文策略
+
+### 11.1 实测证据
+
+会话 `session-94177476-2be7-4455-824e-0a4f15e9079d`：
+
+| 指标 | 值 |
+|---|---|
+| contextWindow | 1,000,000 |
+| pressureTokens | 202,009 |
+| surfaceTokens | 162,786 |
+| compaction 次数 | 0 |
+| 累计输入 | 666,945 uncached + 8,831,232 cache-read |
+| 输出 | 71,752 |
+| 轮次 / 步数 | 2 / 9 |
+
+### 11.2 根因
+
+1. `compaction-basic` 默认 `thresholdRatio=0.8`（`packages/compaction/compaction-basic/src/config.ts:19-23`）。1M 窗口约 800K 才压缩，202K 时不会触发；每一步都重发完整 surface。
+2. `desktop-context` 的 L2 只监听 `compaction/summary`（`src/context.ts:320-333`）。没有 compaction 就没有 L2；有 compaction 时，L2 也只是把摘要写入 KV 并在下一轮作为新 `user/message` 注入（`src/context.ts:375-419`），**不替换任何 L1 节点**，所以是纯增量。
+3. 上游摘要器本来就会合并历史 `<compacted-summary>`（`compaction-basic/src/summarizer.ts:43-46`），下一次压缩会自动把旧 checkpoint 与新内容合并。也就是说 L1→L2 的“摘要再摘要”已经由上游完成，单独的 L2 折叠是重复工作 + 额外 LLM 调用。
+4. 多智能体：profile 挂载了 `desktop-orchestrator-local`，打包 Beta 又启用了 `desktop-orchestrator` / `desktop-marvis`，两套编排同时存在；Pro 定级、递归分发、子 agent 都在放大调用量。
+
+### 11.3 现在的策略
+
+- **L0/L1/L2**：全部交给上游 `compaction-basic`。它在压缩最旧区间时会重放 system + 工具 + 历史，并用 `<compacted-summary>` 合并旧 checkpoint，天然是递归摘要。
+- **预算**（profile patch，硬约束）：
+  ```yaml
+  - id: compaction-basic
+    config:
+      thresholdRatio: 0.1
+      retainRatio: 0.02
+      headroomTokens: 16384
+      maxTokens: 4096
+  ```
+  - 1M 窗口：约 100K 触发、约 19.8K 保留。
+  - 128K 窗口：约 12.8K 触发、约 2.5K 保留（比例在各窗口都合法）。
+  - 同一预算也写入稳定版 profile：`C:\Users\zwh12\.dsh\profiles\desktop\cordis.patch.yml`。
+- **L2/L3 记忆**：`desktop-context` 已重新启用（`foldEvery: 4`、`maxTokens: 1024`、`recall: true`）。L2 每积累 4 条 L1 折叠成会话摘要写入 `desktop_memory`；L3 是跨会话保留的摘要，在下一轮起始按需召回一条，而不是每轮全量注入。摘要折叠是增量，不替换上游 `compaction-basic` 的 L1/L2。
+- **文件记忆 / RAG**：`fileIndex`/`fileRecall` 默认关闭；`index_file` 与文件列表召回只在显式开启后生效，避免默认注入。
+- **自我反思 / 熔断**：`desktop-loop-guard` 已启用。重复调用、无进展、步数/时间超限时先触发一次去噪反思，仍不收敛则熔断并向用户提问；复位后继续。
+- **多智能体**：`desktop-orchestrator`、`desktop-marvis`、本地 `orchestrator`/`marvis`/`local-lmstudio` 已从构建与导出中移除；源码归档在 `D:\Apps\ds-desktop\说明文档\归档\multi-agent-20261023\`。profile 同时禁用打包 Beta 里的旧副本。
+- **保留**：`desktop-vision` / `desktop-baidu-search`（感知与搜索，不属于编排）。
+- **本地私有层**：`dsh-plugin-desktop-local` 通过 `- insert:` 挂载；裸 `- id:` 行是覆盖已有 entry 的补丁，写错会被加载器报 `entry not found` 并跳过。
+
+### 11.4 验收标准（替代 9）
+
+- 新会话 `contextPressure` 在压缩前不超过约 110K，压缩后回落到约 20K。
+- 会话中出现 `compaction/start` / `compaction/summary` / `compaction/end`，且摘要节点包含 `<compacted-summary>`。
+- 工具列表里不再出现 `orchestrate` / `orchestrate_local` / `marvis_send` / `marvis_collect`。
+- `desktop_memory` 在 L2 折叠后出现新摘要；新会话首轮只注入一条最新摘要，不重复注入未变化的版本。
+- 重复/无进展达到阈值时出现一次反思，继续无效后熔断并向用户提问。
+
+### 11.5 诚实边界
+
+这次修订把预算压到 100K/20K，并恢复被误删的记忆分层与自反思；多智能体仍保持移除。L3 仅指“跨会话保留的 L2 摘要 + 按需召回”，文件索引/RAG 默认关闭；如果之后需要更强的跨会话检索，应在 `desktop-context` 上新增显式检索工具，并给它独立的 token 上限。

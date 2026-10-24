@@ -22,8 +22,6 @@ export default defineConfig([
       'loop-guard': 'src/loop-guard.ts',
       'desktop-capture': 'src/desktop-capture.ts',
       'web-search': 'src/web-search.ts',
-      'orchestrator/index': 'src/orchestrator/index.ts',
-      marvis: 'src/marvis.ts',
       'diagnostic-export-worker': 'src/diagnostic-export-worker.ts',
       'packaged-runtime-smoke': 'src/packaged-runtime-smoke.ts',
       runtime: 'src/runtime.ts',

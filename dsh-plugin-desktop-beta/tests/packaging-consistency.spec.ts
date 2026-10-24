@@ -91,7 +91,7 @@ describe('desktop packaging chain consistency', () => {
     expect(files).toContain('package.json')
     // The preload/native-ui planes are produced into lib/ (covered by `lib/**`);
     // the npm publish `files` must additionally cover the .cjs preload outputs.
-    const publishFiles = manifest.files as string[]
+    const publishFiles = (manifest as { files?: string[] }).files ?? []
     expect(publishFiles).toContain('lib/**/*.cjs')
   })
 })
