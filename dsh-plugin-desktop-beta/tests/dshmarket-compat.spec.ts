@@ -146,6 +146,8 @@ async function invokeUpdate(route: MarketRoute, compatVersion?: string, name = '
 }
 
 describe('dsh-market Desktop install compatibility', () => {
+  // Mounts the whole market route table and runs one forced update check, so
+  // it needs more than the 5s default on a cold Windows/module-graph start.
   it('offers the host-provided market update when the Profile omits dshmarket', async () => {
     for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
       vi.stubEnv(name, '')
@@ -207,7 +209,7 @@ describe('dsh-market Desktop install compatibility', () => {
     const client = readFileSync(join(dirname(manifest), 'client', 'client.js'), 'utf8')
     expect(client).toContain('installed["dshmarket"] !== void 0 || updates["dshmarket"] !== void 0')
     expect(client).toContain('const status = updates[self]')
-  })
+  }, 20_000)
 
   it.each([
     '@liustack/modlens',

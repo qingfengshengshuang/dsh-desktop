@@ -1,6 +1,12 @@
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+  // dshmarket 1.70.1 ships its own `undici`; without deduping, the transport
+  // mock in tests/dshmarket-compat.spec.ts patches the hoisted copy while the
+  // market talks through the nested one and reaches the live registry.
+  resolve: {
+    dedupe: ['undici'],
+  },
   test: {
     environment: 'node',
     include: ['tests/**/*.spec.ts'],
